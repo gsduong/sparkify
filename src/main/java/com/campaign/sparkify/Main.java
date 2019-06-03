@@ -25,15 +25,18 @@ public class Main {
 
     public static String main(String[] args) throws IOException {
 
-        if (args.length != 3) {
+        if (args.length < 3) {
             System.out.println("Invalid number of arguments!");
             return "Wrong configuration of ELT Job. Check parameters list of the JAR entry!";
         }
 
         String IP = args[0];
         String PORT = args[1];
-        String appName = args[2];
-        String URL = new StringBuilder().append("http://").append(IP).append(":").append(PORT).append("/ws/v1/cluster/apps?states=running&applicationTypes=SPARK").toString();
+        ArrayList<String> listAppName = new ArrayList<>();
+        for (int i = 2; i < args.length; i++) {
+            listAppName.add(args[i]);
+        }
+        String URL = new StringBuilder().append("http://").append(IP).append(":").append(PORT).append("/ws/v1/cluster/apps?states=running&applicationTypes=SPARK&queue=root.campaign").toString();
         ApiResponse sparkAppResponse;
         sparkAppResponse = JsonService.getApiResponse(URL);
         if (sparkAppResponse == null || sparkAppResponse.getResponseCode() != 200) {
@@ -46,30 +49,31 @@ public class Main {
         for (int i = 0; i < apps.length(); i++) {
             JSONObject e = (JSONObject) apps.get(i);
 
-            if (e.getString("name").equals(appName)) {
+            if (listAppName.contains(e.getString("name"))) {
                 list.add(new SparkApp(IP, e.getString("user"), e.getString("name"), e.getString("state"), e.getString("trackingUrl")));
-                break;
             }
 
         }
-        
-        if (list.size() == 0) {
-            System.out.println(appName + " is currently offline");
-            return appName + " is currently offline";
+        if (list.isEmpty()) {
+            return "There are no running streaming app";
+        }
+        // use jsoup to get latest batch
+        ArrayList<Batch> latestBatches = new ArrayList<>();
+        ArrayList<String> result = new ArrayList<>();
+        for (SparkApp sparkApp : list) {
+            // use jsoup to get latest batch
+            Document doc = Jsoup.connect(sparkApp.getStreamingUrl()).get();
+            Element lastBatchElement = doc.selectFirst("#completed-batches-table > tbody > tr:eq(0)");
+
+            String batchTime = lastBatchElement.select("td:eq(0) > a").text();
+            String inputSize = lastBatchElement.select("td:eq(1)").text();
+            String schedulingDelay = lastBatchElement.select("td:eq(2)").text();
+            String processingTime = lastBatchElement.select("td:eq(3)").text();
+            String totalDelay = lastBatchElement.select("td:eq(4)").text();
+            latestBatches.add(new Batch(batchTime, inputSize, schedulingDelay, processingTime, totalDelay, sparkApp.getName()));
+            result.add(new Batch(batchTime, inputSize, schedulingDelay, processingTime, totalDelay, sparkApp.getName()).toString());
         }
         
-        // use jsoup to get latest batch
-        
-        SparkApp offerBank = list.get(0);
-        Document doc = Jsoup.connect(offerBank.getStreamingUrl()).get();
-        Element lastBatchElement = doc.selectFirst("#completed-batches-table > tbody > tr:eq(0)");
-        
-        String batchTime = lastBatchElement.select("td:eq(0) > a").text();
-        String inputSize = lastBatchElement.select("td:eq(1)").text();
-        String schedulingDelay = lastBatchElement.select("td:eq(2)").text();
-        String processingTime = lastBatchElement.select("td:eq(3)").text();
-        String totalDelay = lastBatchElement.select("td:eq(4)").text();
-        Batch latestBatch = new Batch(batchTime, inputSize, schedulingDelay, processingTime, totalDelay);
-        return latestBatch.toString();
+        return String.join(" ", result);
     }
 }
